@@ -106,6 +106,7 @@ void dat_free(DatDocument *doc);
 
 static char *dat__strndup(const char *s, size_t n)
 {
+    if (!s) return NULL;
     char *copy = (char *)malloc(n + 1);
     if (copy) { memcpy(copy, s, n); copy[n] = '\0'; }
     return copy;
@@ -134,6 +135,7 @@ static int dat__parse_scalar(const char *p, DatValue *out, const char **end)
         if (*p != '"') return 0; /* unterminated string */
         out->type = DAT_STRING;
         out->s    = dat__strndup(start, (size_t)(p - start));
+        if (!out->s) return 0;
         *end = p + 1;
         return 1;
     }
