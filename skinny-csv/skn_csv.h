@@ -93,18 +93,19 @@ typedef struct {
  * Public API
  * ---------------------------------------------------------------------- */
 
-/* Load and parse a CSV file; types inferred. Returns NULL on failure. */
-CsvDocument *csv_load(const char *filename);
+/* Load and parse a CSV file; types inferred. sep is the field separator (e.g. ',' or ';').
+ * Returns NULL on failure. */
+CsvDocument *csv_load(const char *filename, char sep);
 
 /* Load and parse a CSV file with an explicit type schema.
  * Columns not listed in schema are inferred. Returns NULL on failure. */
-CsvDocument *csv_load_schema(const char *filename, const CsvSchema *schema, int schema_count);
+CsvDocument *csv_load_schema(const char *filename, const CsvSchema *schema, int schema_count, char sep);
 
 /* Parse a CSV document from a null-terminated string; types inferred. */
-CsvDocument *csv_parse_string(const char *text);
+CsvDocument *csv_parse_string(const char *text, char sep);
 
 /* Parse a CSV document from a null-terminated string with an explicit schema. */
-CsvDocument *csv_parse_string_schema(const char *text, const CsvSchema *schema, int schema_count);
+CsvDocument *csv_parse_string_schema(const char *text, const CsvSchema *schema, int schema_count, char sep);
 
 /* Return a view of the named column as a DatArray.
  * The returned pointers are owned by the document — do not free them.
@@ -160,7 +161,7 @@ static int csv__buf_push(char **buf, size_t *len, size_t *cap, char c)
  * Sets *eol = 1 when a newline or EOF terminated the field.
  * Returns NULL only on allocation failure.
  */
-static char *csv__read_field(const char **p, int *eol)
+static char *csv__read_field(const char **p, int *eol, char sep)
 {
     *eol = 0;
 
@@ -186,13 +187,13 @@ static char *csv__read_field(const char **p, int *eol)
             }
         }
     } else {
-        while (*s && *s != ',' && *s != '\n' && *s != '\r') {
+        while (*s && *s != sep && *s != '\n' && *s != '\r') {
             if (!csv__buf_push(&buf, &len, &cap, *s)) return NULL;
             s++;
         }
     }
 
-    if      (*s == ',')  s++;
+    if      (*s == sep)  s++;
     else if (*s == '\r') { s++; if (*s == '\n') s++; *eol = 1; }
     else if (*s == '\n') { s++; *eol = 1; }
     else                  *eol = 1; /* '\0' — end of input */
@@ -293,7 +294,8 @@ static int csv__convert_column(char **cells, int row_count, int col, int col_cou
  */
 static int csv__parse_cells(const char *text,
                               char ***out_names, int *out_cols,
-                              char ***out_cells, int *out_rows)
+                              char ***out_cells, int *out_rows,
+                              char sep)
 {
     const char *p = text;
     /* skip UTF-8 BOM */
@@ -315,7 +317,7 @@ static int csv__parse_cells(const char *text,
             if (!t) goto cleanup_names;
             names = t;
         }
-        char *f = csv__read_field(&p, &eol);
+        char *f = csv__read_field(&p, &eol, sep);
         if (!f) goto cleanup_names;
         names[col_count++] = f;
     }
@@ -345,7 +347,7 @@ static int csv__parse_cells(const char *text,
         int col = 0;
         eol = 0;
         while (!eol && *p) {
-            char *f = csv__read_field(&p, &eol);
+            char *f = csv__read_field(&p, &eol, sep);
             if (!f) goto cleanup_cells;
             if (col < col_count)
                 cells[(size_t)row_count * col_count + col] = f;
@@ -445,12 +447,13 @@ static char *csv__read_file(const char *filename)
 }
 
 static CsvDocument *csv__parse_do(const char *text,
-                                   const CsvSchema *schema, int schema_count)
+                                   const CsvSchema *schema, int schema_count,
+                                   char sep)
 {
     char **names; int col_count;
     char **cells; int row_count;
 
-    if (!csv__parse_cells(text, &names, &col_count, &cells, &row_count))
+    if (!csv__parse_cells(text, &names, &col_count, &cells, &row_count, sep))
         return NULL;
 
     CsvDocument *doc = csv__build(names, col_count, cells, row_count,
@@ -465,32 +468,32 @@ static CsvDocument *csv__parse_do(const char *text,
 
 /* ---- public API ---- */
 
-CsvDocument *csv_parse_string(const char *text)
+CsvDocument *csv_parse_string(const char *text, char sep)
 {
-    return csv__parse_do(text, NULL, 0);
+    return csv__parse_do(text, NULL, 0, sep);
 }
 
 CsvDocument *csv_parse_string_schema(const char *text,
-                                      const CsvSchema *schema, int schema_count)
+                                      const CsvSchema *schema, int schema_count, char sep)
 {
-    return csv__parse_do(text, schema, schema_count);
+    return csv__parse_do(text, schema, schema_count, sep);
 }
 
-CsvDocument *csv_load(const char *filename)
+CsvDocument *csv_load(const char *filename, char sep)
 {
     char *buf = csv__read_file(filename);
     if (!buf) return NULL;
-    CsvDocument *doc = csv__parse_do(buf, NULL, 0);
+    CsvDocument *doc = csv__parse_do(buf, NULL, 0, sep);
     free(buf);
     return doc;
 }
 
 CsvDocument *csv_load_schema(const char *filename,
-                              const CsvSchema *schema, int schema_count)
+                              const CsvSchema *schema, int schema_count, char sep)
 {
     char *buf = csv__read_file(filename);
     if (!buf) return NULL;
-    CsvDocument *doc = csv__parse_do(buf, schema, schema_count);
+    CsvDocument *doc = csv__parse_do(buf, schema, schema_count, sep);
     free(buf);
     return doc;
 }

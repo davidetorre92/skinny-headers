@@ -27,7 +27,7 @@ static void print_csv(CsvDocument *doc)
 
 int main(void)
 {
-    CsvDocument *doc = csv_load("example.csv");
+    CsvDocument *doc = csv_load("example.csv", ',');
     if (!doc) { fprintf(stderr, "failed to load example.csv\n"); return 1; }
 
     /* --- print the full table --- */
