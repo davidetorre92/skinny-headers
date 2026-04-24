@@ -3,6 +3,11 @@
  *  MODES
  *    SKN_LOG_PLAIN (1) : message only
  *    SKN_LOG_TIMED (2) : prepends [YYYY-MM-DD HH:mm:ss] to every message
+ *    SKN_LOG_LEVEL (3) : prepends [YYYY-MM-DD HH:mm:ss] INFO/WARNING/ERROR -
+ *
+ *  LOG LEVELS (used with SKN_LOG_LEVEL mode)
+ *    SKN_LOG_INFO, SKN_LOG_WARN, SKN_LOG_ERR
+ *    Ignored in modes 1 and 2.
  *
  *  TIMER
  *    slog_start_timer / slog_end_timer bracket timed sections.
@@ -17,11 +22,11 @@
  *    #include "skn_log.h"
  *
  *  EXAMPLE
- *    SknLog *log = slog_init(SKN_LOG_TIMED, stdout);
- *    slog_print(log, "starting computation\n");
+ *    SknLog *log = slog_init(SKN_LOG_LEVEL, stdout);
+ *    slog_print(log, SKN_LOG_INFO, "starting computation\n");
  *    slog_start_timer(log);
  *    heavy_work();
- *    slog_end_timer(log, "done, took %t\n");
+ *    slog_end_timer(log, SKN_LOG_INFO, "done, took %t\n");
  *    slog_free(log);
  */
 
@@ -39,8 +44,15 @@
 
 typedef enum {
     SKN_LOG_PLAIN = 1,   /* message only */
-    SKN_LOG_TIMED = 2    /* [YYYY-MM-DD HH:mm:ss] prefix on every message */
+    SKN_LOG_TIMED = 2,   /* [YYYY-MM-DD HH:mm:ss] prefix on every message */
+    SKN_LOG_LEVEL = 3    /* [YYYY-MM-DD HH:mm:ss] INFO/WARNING/ERROR - message */
 } SknLogMode;
+
+typedef enum {
+    SKN_LOG_INFO = 0,
+    SKN_LOG_WARN = 1,
+    SKN_LOG_ERR  = 2
+} SknLogLevel;
 
 typedef struct {
     FILE           *stream;
@@ -61,8 +73,10 @@ SknLog *slog_init(SknLogMode mode, FILE *stream);
 void slog_free(SknLog *log);
 
 /* Print a printf-style formatted message.
- * In SKN_LOG_TIMED mode a [YYYY-MM-DD HH:mm:ss] prefix is prepended. */
-void slog_print(SknLog *log, const char *fmt, ...);
+ * In SKN_LOG_TIMED mode a [YYYY-MM-DD HH:mm:ss] prefix is prepended.
+ * In SKN_LOG_LEVEL mode the prefix also includes the level label.
+ * level is ignored in SKN_LOG_PLAIN and SKN_LOG_TIMED modes. */
+void slog_print(SknLog *log, SknLogLevel level, const char *fmt, ...);
 
 /* Record the start of a timed section (wall-clock). */
 void slog_start_timer(SknLog *log);
@@ -70,8 +84,10 @@ void slog_start_timer(SknLog *log);
 /* Print msg, replacing %t with the elapsed time since slog_start_timer.
  * The time unit is selected automatically for readability.
  * %% in msg outputs a literal %; all other text is printed verbatim.
- * In SKN_LOG_TIMED mode a timestamp prefix is prepended. */
-void slog_end_timer(SknLog *log, const char *msg);
+ * In SKN_LOG_TIMED mode a timestamp prefix is prepended.
+ * In SKN_LOG_LEVEL mode the prefix also includes the level label.
+ * level is ignored in SKN_LOG_PLAIN and SKN_LOG_TIMED modes. */
+void slog_end_timer(SknLog *log, SknLogLevel level, const char *msg);
 
 /* -------------------------------------------------------------------------
  * Implementation
@@ -86,6 +102,12 @@ static void log__print_timestamp(FILE *stream)
     char buf[20]; /* "YYYY-MM-DD HH:mm:ss\0" */
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", t);
     fprintf(stream, "[%s] ", buf);
+}
+
+static void log__print_level(FILE *stream, SknLogLevel level)
+{
+    static const char *labels[] = { "INFO", "WARNING", "ERROR" };
+    fprintf(stream, "%s - ", labels[level]);
 }
 
 static long long log__elapsed_ns(struct timespec *start)
@@ -122,10 +144,14 @@ void slog_free(SknLog *log)
     free(log);
 }
 
-void slog_print(SknLog *log, const char *fmt, ...)
+void slog_print(SknLog *log, SknLogLevel level, const char *fmt, ...)
 {
-    if (log->mode == SKN_LOG_TIMED)
+    if (log->mode == SKN_LOG_TIMED) {
         log__print_timestamp(log->stream);
+    } else if (log->mode == SKN_LOG_LEVEL) {
+        log__print_timestamp(log->stream);
+        log__print_level(log->stream, level);
+    }
     va_list ap;
     va_start(ap, fmt);
     vfprintf(log->stream, fmt, ap);
@@ -137,14 +163,18 @@ void slog_start_timer(SknLog *log)
     clock_gettime(CLOCK_MONOTONIC, &log->t_start);
 }
 
-void slog_end_timer(SknLog *log, const char *msg)
+void slog_end_timer(SknLog *log, SknLogLevel level, const char *msg)
 {
     long long ns = log__elapsed_ns(&log->t_start);
     char elapsed[32];
     log__format_elapsed(ns, elapsed, sizeof(elapsed));
 
-    if (log->mode == SKN_LOG_TIMED)
+    if (log->mode == SKN_LOG_TIMED) {
         log__print_timestamp(log->stream);
+    } else if (log->mode == SKN_LOG_LEVEL) {
+        log__print_timestamp(log->stream);
+        log__print_level(log->stream, level);
+    }
 
     const char *p = msg;
     while (*p) {
