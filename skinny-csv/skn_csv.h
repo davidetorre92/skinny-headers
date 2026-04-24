@@ -441,6 +441,11 @@ static char *csv__read_file(const char *filename)
     char *buf = (char *)malloc((size_t)size + 1);
     if (!buf) { fclose(f); return NULL; }
     size_t nread = fread(buf, 1, (size_t)size, f);
+    if (ferror(f)) {
+        free(buf);
+        fclose(f);
+        return NULL;
+    }
     buf[nread] = '\0';
     fclose(f);
     return buf;
