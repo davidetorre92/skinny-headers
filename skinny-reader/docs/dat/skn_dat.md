@@ -95,6 +95,24 @@ void dat_free(DatDocument *doc);
 ```
 Frees all memory owned by the document, including keys, string values, list nodes, and the document itself. Safe to call with `NULL`.
 
+### `dat_print_value`
+```c
+static void dat_print_value(DatValue *v);
+```
+Prints a single value to `stdout` in its source literal form (`42`, `3.14f`, `"hello"`, `[1, 2, 3]`).
+
+### `dat_print_row`
+```c
+static void dat_print_row(DatRow *r);
+```
+Prints one row as `key => value` (no trailing newline).
+
+### `dat_print_doc`
+```c
+static void dat_print_doc(DatDocument *doc, int indent);
+```
+Prints every row in the document. When `indent` is non-zero, each row is preceded by a tab.
+
 ---
 
 ## Data model
@@ -144,12 +162,12 @@ classDiagram
         int count
     }
 
-    DatDocument "1" --> "0..*" DatRow : head (linked list)
-    DatRow "1" --> "1" DatValue : value
-    DatValue "1" --> "1" DatType : type (tag)
-    DatValue "1" --> "0..1" DatList : list (when DAT_LIST)
-    DatList "1" --> "1" DatType : elem_type
-    DatList "1" --> "0..*" DatListNode : head (linked list)
+    DatDocument "1" --> "0..*" DatRow      : head (linked list)
+    DatRow      "1" --> "1"   DatValue    : value
+    DatValue    "1" --> "1"   DatType     : type (tag)
+    DatValue    "1" --> "0..1" DatList    : list (when DAT_LIST)
+    DatList     "1" --> "1"   DatType     : elem_type
+    DatList     "1" --> "0..*" DatListNode : head (linked list)
 ```
 
 ---
@@ -166,6 +184,9 @@ flowchart TD
     dat_parse_string["dat_parse_string()"]:::pub
     dat_get["dat_get()"]:::pub
     dat_free["dat_free()"]:::pub
+    dat_print_value["dat_print_value()"]:::pub
+    dat_print_row["dat_print_row()"]:::pub
+    dat_print_doc["dat_print_doc()"]:::pub
 
     %% Internal functions
     dat__parse_lines["dat__parse_lines()"]:::internal
@@ -190,6 +211,14 @@ flowchart TD
     %% Public -> types
     dat_get           --> DatDocument
     dat_get           --> DatRow
+
+    %% Print functions
+    dat_print_doc     --> dat_print_row
+    dat_print_doc     --> DatDocument
+    dat_print_doc     --> DatRow
+    dat_print_row     --> dat_print_value
+    dat_print_value   --> DatValue
+    dat_print_value   --> DatListNode
 
     %% Internal -> internal
     dat__parse_lines  --> dat__parse_value
