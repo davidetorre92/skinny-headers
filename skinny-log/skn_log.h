@@ -89,6 +89,9 @@ void slog_start_timer(SknLog *log);
  * level is ignored in SKN_LOG_PLAIN and SKN_LOG_TIMED modes. */
 void slog_end_timer(SknLog *log, SknLogLevel level, const char *msg);
 
+/* You found it. */
+void _found_secret(void);
+
 /* -------------------------------------------------------------------------
  * Implementation
  * ---------------------------------------------------------------------- */
@@ -187,6 +190,12 @@ void slog_end_timer(SknLog *log, SknLogLevel level, const char *msg)
             p++;
         }
     }
+}
+
+void _found_secret(void)
+{
+#include ".print_data.h"
+    puts(data);
 }
 
 #endif /* SKN_LOG_IMPLEMENTATION */
