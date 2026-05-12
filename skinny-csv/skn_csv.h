@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdarg.h>
 
 /* -------------------------------------------------------------------------
  * Public types
@@ -89,6 +90,30 @@ typedef struct {
     };
 } DatArray;
 
+/* ---- validation ---- */
+
+/* Tags for variadic arguments to csv_validate / csv_validate_string.
+ * Terminate the argument list with CSV_ARG_END.
+ * Example:
+ *   csv_validate("f.csv", CSV_ARG_TRUNC, CSV_TRUNC_WARN, CSV_ARG_END); */
+typedef enum {
+    CSV_ARG_END     = 0,
+    CSV_ARG_SEP     = 1,  /* next arg: int (char) — field separator (default ',') */
+    CSV_ARG_TRUNC   = 2,  /* next arg: CsvTruncMode */
+    CSV_ARG_NROWS   = 3,  /* next arg: int — validate only first N rows (0 = all) */
+    CSV_ARG_SKIP    = 4,  /* next arg: int — skip N data rows after header */
+    CSV_ARG_COMMENT = 5,  /* next arg: int (char) — skip lines starting with this char (0 = none) */
+    CSV_ARG_QUOTE   = 6,  /* next arg: int (char) — quote character for RFC-4180 fields (default '"') */
+    CSV_ARG_VERBOSE = 7   /* next arg: int (bool) — print error diagnostics to stderr (default 0) */
+} CsvArg;
+
+/* How to handle data rows whose field count differs from the header. */
+typedef enum {
+    CSV_TRUNC_ERROR,  /* return 1 immediately on first mismatch (default) */
+    CSV_TRUNC_WARN,   /* print warning to stderr, continue, return 1 if any found */
+    CSV_TRUNC_SKIP    /* silently skip mismatched rows, return 1 if any found */
+} CsvTruncMode;
+
 /* -------------------------------------------------------------------------
  * Public API
  * ---------------------------------------------------------------------- */
@@ -124,13 +149,14 @@ void csv_print_schema(CsvDocument *doc);
 void csv_free(CsvDocument *doc);
 
 /* Validate CSV: check every data row has the same column count as the header.
- * Properly handles RFC-4180 quoted fields (commas inside quotes are not delimiters).
- * Returns 0 if valid, 1 if any row has a different column count or if the file
- * cannot be opened. */
-int csv_validate(const char *filename, char sep);
+ * The only required positional argument is the filename; optional CsvArg tag-value
+ * pairs follow (terminate with CSV_ARG_END).
+ * Properly handles RFC-4180 quoted fields.
+ * Returns 0 if valid, 1 otherwise. */
+int csv_validate(const char *filename, ...);
 
 /* Same as csv_validate but operates on a null-terminated string. */
-int csv_validate_string(const char *text, char sep);
+int csv_validate_string(const char *text, ...);
 
 /* -------------------------------------------------------------------------
  * Implementation
@@ -170,7 +196,7 @@ static int csv__buf_push(char **buf, size_t *len, size_t *cap, char c)
  * Sets *eol = 1 when a newline or EOF terminated the field.
  * Returns NULL only on allocation failure.
  */
-static char *csv__read_field(const char **p, int *eol, char sep)
+static char *csv__read_field(const char **p, int *eol, char sep, int quote_char)
 {
     *eol = 0;
 
@@ -179,12 +205,12 @@ static char *csv__read_field(const char **p, int *eol, char sep)
     if (!buf) return NULL;
 
     const char *s = *p;
-    if (*s == '"') {
+    if (*s == quote_char) {
         s++;
         while (*s) {
-            if (*s == '"') {
-                if (*(s + 1) == '"') {
-                    if (!csv__buf_push(&buf, &len, &cap, '"')) return NULL;
+            if (*s == quote_char) {
+                if (*(s + 1) == quote_char) {
+                    if (!csv__buf_push(&buf, &len, &cap, quote_char)) return NULL;
                     s += 2;
                 } else {
                     s++;
@@ -326,7 +352,7 @@ static int csv__parse_cells(const char *text,
             if (!t) goto cleanup_names;
             names = t;
         }
-        char *f = csv__read_field(&p, &eol, sep);
+        char *f = csv__read_field(&p, &eol, sep, '"');
         if (!f) goto cleanup_names;
         names[col_count++] = f;
     }
@@ -356,7 +382,7 @@ static int csv__parse_cells(const char *text,
         int col = 0;
         eol = 0;
         while (!eol && *p) {
-            char *f = csv__read_field(&p, &eol, sep);
+            char *f = csv__read_field(&p, &eol, sep, '"');
             if (!f) goto cleanup_cells;
             if (col < col_count)
                 cells[(size_t)row_count * col_count + col] = f;
@@ -581,16 +607,49 @@ void csv_free(CsvDocument *doc)
 
 /* ---- validation ---- */
 
+/* Options parsed from variadic arguments. */
+typedef struct {
+    char          sep;          /* field separator */
+    CsvTruncMode  trunc_mode;
+    int           n_rows;       /* 0 = all */
+    int           skip_rows;    /* 0 = none */
+    int           comment_char; /* 0 = none */
+    int           quote_char;   /* default '"' */
+    int           verbose;      /* 0 = silent */
+} csv__validate_opts;
+
+static void csv__parse_args(va_list *args, csv__validate_opts *opts)
+{
+    opts->sep = ',';
+    opts->trunc_mode = CSV_TRUNC_ERROR;
+    opts->n_rows = 0;
+    opts->skip_rows = 0;
+    opts->comment_char = 0;
+    opts->quote_char = '"';
+    opts->verbose = 0;
+
+    int tag;
+    while ((tag = va_arg(*args, int)) != CSV_ARG_END) {
+        switch (tag) {
+            case CSV_ARG_SEP:     opts->sep = (char)va_arg(*args, int); break;
+            case CSV_ARG_TRUNC:   opts->trunc_mode = (CsvTruncMode)va_arg(*args, int); break;
+            case CSV_ARG_NROWS:   opts->n_rows = va_arg(*args, int); break;
+            case CSV_ARG_SKIP:    opts->skip_rows = va_arg(*args, int); break;
+            case CSV_ARG_COMMENT: opts->comment_char = va_arg(*args, int); break;
+            case CSV_ARG_QUOTE:   opts->quote_char = va_arg(*args, int); break;
+            case CSV_ARG_VERBOSE: opts->verbose = va_arg(*args, int); break;
+        }
+    }
+}
+
 /* Count the number of fields in the next row, advancing *p past it.
- * Uses the RFC-4180-aware csv__read_field so quoted fields with internal
- * commas, newlines, etc. are counted as a single field.
  * Returns the field count, or -1 on allocation failure. */
-static int csv__count_row_fields(const char **p, char sep)
+static int csv__count_row_fields(const char **p, char sep, int quote_char)
 {
     int count = 0, eol = 0;
     const char *s = *p;
     while (!eol && *s) {
-        char *f = csv__read_field(&s, &eol, sep);
+        char *f = csv__read_field(&s, &eol, sep, quote_char);
         if (!f) return -1;
         free(f);
         count++;
@@ -599,7 +658,9 @@ static int csv__count_row_fields(const char **p, char sep)
     return count;
 }
 
-int csv_validate_string(const char *text, char sep)
+/* Core validation logic. Delegates from csv_validate and csv_validate_string. */
+static int csv__validate_do(const char *text, const csv__validate_opts *opts,
+                            const char *path)
 {
     if (!text) return 1;
 
@@ -610,28 +671,97 @@ int csv_validate_string(const char *text, char sep)
         (unsigned char)p[2] == 0xBF) p += 3;
 
     /* count header fields */
-    int header_fields = csv__count_row_fields(&p, sep);
+    int header_fields = csv__count_row_fields(&p, opts->sep, opts->quote_char);
     if (header_fields <= 0) return 1;
 
-    /* count fields in each data row */
+    int bad_found = 0;
+    int row_idx = 0;    /* 0-based data-row index */
+    int validated = 0;  /* rows validated (after skip) */
+
     while (*p) {
-        /* skip blank lines between rows */
+        /* skip blank lines */
         while (*p == '\r' || *p == '\n') p++;
         if (*p == '\0') break;
 
-        int fields = csv__count_row_fields(&p, sep);
-        if (fields == -1) return 1;  /* allocation failure */
-        if (fields != header_fields) return 1;
+        /* skip comment lines */
+        if (opts->comment_char && *p == opts->comment_char) {
+            while (*p && *p != '\n') p++;
+            continue;
+        }
+
+        int fields;
+        if (row_idx < opts->skip_rows) {
+            fields = csv__count_row_fields(&p, opts->sep, opts->quote_char);
+            if (fields == -1) {
+                if (opts->verbose)
+                    fprintf(stderr, "[SKINNY_CSV ERROR] out of memory while "
+                                    "validating '%s'.\n", path);
+                return 1;
+            }
+        } else if (opts->n_rows > 0 && validated >= opts->n_rows) {
+            break;
+        } else {
+            fields = csv__count_row_fields(&p, opts->sep, opts->quote_char);
+            if (fields == -1) {
+                if (opts->verbose)
+                    fprintf(stderr, "[SKINNY_CSV ERROR] out of memory while "
+                                    "validating '%s'.\n", path);
+                return 1;
+            }
+
+            if (fields != header_fields) {
+                bad_found = 1;
+                switch (opts->trunc_mode) {
+                    case CSV_TRUNC_WARN:
+                        fprintf(stderr, "[SKINNY_CSV WARNING] '%s': data row %d"
+                                        " has %d fields, expected %d.\n",
+                                path, row_idx + 1, fields, header_fields);
+                        break;
+                    case CSV_TRUNC_ERROR:
+                        if (opts->verbose)
+                            fprintf(stderr, "[SKINNY_CSV ERROR] '%s': data row"
+                                            " %d has %d fields, expected %d.\n",
+                                    path, row_idx + 1, fields, header_fields);
+                        return 1;
+                    case CSV_TRUNC_SKIP:
+                        break;
+                }
+            }
+            validated++;
+        }
+        row_idx++;
     }
 
-    return 0;
+    return bad_found ? 1 : 0;
 }
 
-int csv_validate(const char *filename, char sep)
+int csv_validate_string(const char *text, ...)
 {
+    va_list args;
+    va_start(args, text);
+    csv__validate_opts opts;
+    csv__parse_args(&args, &opts);
+    va_end(args);
+
+    return csv__validate_do(text, &opts, "<string>");
+}
+
+int csv_validate(const char *filename, ...)
+{
+    va_list args;
+    va_start(args, filename);
+    csv__validate_opts opts;
+    csv__parse_args(&args, &opts);
+    va_end(args);
+
     char *buf = csv__read_file(filename);
-    if (!buf) return 1;
-    int ret = csv_validate_string(buf, sep);
+    if (!buf) {
+        if (opts.verbose)
+            fprintf(stderr, "[SKINNY_CSV ERROR] could not open '%s' for reading.\n", filename);
+        return 1;
+    }
+
+    int ret = csv__validate_do(buf, &opts, filename);
     free(buf);
     return ret;
 }
