@@ -123,6 +123,15 @@ void csv_print_schema(CsvDocument *doc);
 /* Free all memory owned by the document. Safe to call with NULL. */
 void csv_free(CsvDocument *doc);
 
+/* Validate CSV: check every data row has the same column count as the header.
+ * Properly handles RFC-4180 quoted fields (commas inside quotes are not delimiters).
+ * Returns 0 if valid, 1 if any row has a different column count or if the file
+ * cannot be opened. */
+int csv_validate(const char *filename, char sep);
+
+/* Same as csv_validate but operates on a null-terminated string. */
+int csv_validate_string(const char *text, char sep);
+
 /* -------------------------------------------------------------------------
  * Implementation
  * ---------------------------------------------------------------------- */
@@ -568,6 +577,63 @@ void csv_free(CsvDocument *doc)
     free(doc->types);
     free(doc->data);
     free(doc);
+}
+
+/* ---- validation ---- */
+
+/* Count the number of fields in the next row, advancing *p past it.
+ * Uses the RFC-4180-aware csv__read_field so quoted fields with internal
+ * commas, newlines, etc. are counted as a single field.
+ * Returns the field count, or -1 on allocation failure. */
+static int csv__count_row_fields(const char **p, char sep)
+{
+    int count = 0, eol = 0;
+    const char *s = *p;
+    while (!eol && *s) {
+        char *f = csv__read_field(&s, &eol, sep);
+        if (!f) return -1;
+        free(f);
+        count++;
+    }
+    *p = s;
+    return count;
+}
+
+int csv_validate_string(const char *text, char sep)
+{
+    if (!text) return 1;
+
+    const char *p = text;
+    /* skip UTF-8 BOM */
+    if ((unsigned char)p[0] == 0xEF &&
+        (unsigned char)p[1] == 0xBB &&
+        (unsigned char)p[2] == 0xBF) p += 3;
+
+    /* count header fields */
+    int header_fields = csv__count_row_fields(&p, sep);
+    if (header_fields <= 0) return 1;
+
+    /* count fields in each data row */
+    while (*p) {
+        /* skip blank lines between rows */
+        while (*p == '\r' || *p == '\n') p++;
+        if (*p == '\0') break;
+
+        int fields = csv__count_row_fields(&p, sep);
+        if (fields == -1) return 1;  /* allocation failure */
+        if (fields != header_fields) return 1;
+    }
+
+    return 0;
+}
+
+int csv_validate(const char *filename, char sep)
+{
+    char *buf = csv__read_file(filename);
+    if (!buf) return 1;
+    int ret = csv_validate_string(buf, sep);
+    free(buf);
+    return ret;
 }
 
 #endif /* SKN_CSV_IMPLEMENTATION */
