@@ -35,6 +35,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <stdarg.h>
 #include <time.h>
 
@@ -57,6 +58,7 @@ typedef enum {
 typedef struct {
     FILE           *stream;
     SknLogMode      mode;
+    char           *name;       /* optional label, set by slog_set_name */
     struct timespec t_start;   /* set by slog_start_timer */
 } SknLog;
 
@@ -71,6 +73,12 @@ SknLog *slog_init(SknLogMode mode, FILE *stream);
 
 /* Free the logger. Does not close the underlying stream. */
 void slog_free(SknLog *log);
+
+/* Assign a label to the logger. The name is copied internally and appears in
+ * every subsequent message: "[name] message" in PLAIN mode,
+ * "[timestamp] [name] message" in TIMED/LEVEL mode.
+ * Pass NULL to clear a previously set name. */
+void slog_set_name(SknLog *log, const char *name);
 
 /* Print a printf-style formatted message.
  * In SKN_LOG_TIMED mode a [YYYY-MM-DD HH:mm:ss] prefix is prepended.
@@ -107,6 +115,11 @@ static void log__print_timestamp(FILE *stream)
     fprintf(stream, "[%s] ", buf);
 }
 
+static void log__print_name(FILE *stream, const char *name)
+{
+    if (name) fprintf(stream, "[%s] ", name);
+}
+
 static void log__print_level(FILE *stream, SknLogLevel level)
 {
     static const char *labels[] = { "INFO", "WARNING", "ERROR" };
@@ -137,6 +150,7 @@ SknLog *slog_init(SknLogMode mode, FILE *stream)
     if (!log) return NULL;
     log->stream          = stream;
     log->mode            = mode;
+    log->name            = NULL;
     log->t_start.tv_sec  = 0;
     log->t_start.tv_nsec = 0;
     return log;
@@ -144,15 +158,32 @@ SknLog *slog_init(SknLogMode mode, FILE *stream)
 
 void slog_free(SknLog *log)
 {
+    if (log) free(log->name);
     free(log);
+}
+
+void slog_set_name(SknLog *log, const char *name)
+{
+    free(log->name);
+    if (name) {
+        size_t len = strlen(name);
+        log->name = (char *)malloc(len + 1);
+        if (log->name) memcpy(log->name, name, len + 1);
+    } else {
+        log->name = NULL;
+    }
 }
 
 void slog_print(SknLog *log, SknLogLevel level, const char *fmt, ...)
 {
-    if (log->mode == SKN_LOG_TIMED) {
+    if (log->mode == SKN_LOG_PLAIN) {
+        log__print_name(log->stream, log->name);
+    } else if (log->mode == SKN_LOG_TIMED) {
         log__print_timestamp(log->stream);
+        log__print_name(log->stream, log->name);
     } else if (log->mode == SKN_LOG_LEVEL) {
         log__print_timestamp(log->stream);
+        log__print_name(log->stream, log->name);
         log__print_level(log->stream, level);
     }
     va_list ap;
@@ -172,10 +203,14 @@ void slog_end_timer(SknLog *log, SknLogLevel level, const char *msg)
     char elapsed[32];
     log__format_elapsed(ns, elapsed, sizeof(elapsed));
 
-    if (log->mode == SKN_LOG_TIMED) {
+    if (log->mode == SKN_LOG_PLAIN) {
+        log__print_name(log->stream, log->name);
+    } else if (log->mode == SKN_LOG_TIMED) {
         log__print_timestamp(log->stream);
+        log__print_name(log->stream, log->name);
     } else if (log->mode == SKN_LOG_LEVEL) {
         log__print_timestamp(log->stream);
+        log__print_name(log->stream, log->name);
         log__print_level(log->stream, level);
     }
 
