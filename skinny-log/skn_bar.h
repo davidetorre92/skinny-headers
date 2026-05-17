@@ -2,7 +2,7 @@
  *
  *  SINGLE BAR
  *    Renders in-place using \r; no ANSI codes needed.
- *    Format: [################..........] 62%  62/100
+ *    Format: [▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱] 62%  62/100
  *    Call sbar_finish() to emit a trailing \n.
  *
  *  BAR SET
@@ -86,8 +86,8 @@ typedef struct {
     int   total;    /* 100% mark; always >= 1 */
     int   current;
     int   width;    /* character cells inside the brackets; always >= 1 */
-    char  fill;     /* completed portion character, default '#' */
-    char  empty;    /* remaining portion character, default '.' */
+    const char *fill;     /* completed portion string, default "▰" */
+    const char *empty;    /* remaining portion string, default "▱" */
 } SknBar;
 
 typedef struct {
@@ -109,8 +109,8 @@ SknBar *sbar_init(int total, int width, FILE *stream);
 /* Free the bar. Does not close the underlying stream. */
 void sbar_free(SknBar *bar);
 
-/* Set fill and empty characters (defaults '#' and '.'). */
-void sbar_set_chars(SknBar *bar, char fill, char empty);
+/* Set fill and empty strings (defaults "▰" and "▱"). */
+void sbar_set_chars(SknBar *bar, const char *fill, const char *empty);
 
 /* Redraw the bar at absolute position value (clamped to [0, total]). */
 void sbar_update(SknBar *bar, int value);
@@ -126,7 +126,7 @@ void sbar_finish(SknBar *bar);
  * ---------------------------------------------------------------------- */
 
 /* Allocate a set of n bars all writing to stream.
- * Default per bar: total=100, width=40, fill='#', empty='.'.
+ * Default per bar: total=100, width=40, fill="▰", empty="▱".
  * Default mode: SKN_LOG_PLAIN. */
 SknBarSet *sbars_init(int n, FILE *stream);
 
@@ -139,8 +139,8 @@ void sbars_set_mode(SknBarSet *set, SknLogMode mode);
 /* Override total and width for bar i. Must be called before sbars_start(). */
 void sbars_config(SknBarSet *set, int i, int total, int width);
 
-/* Override fill and empty characters for bar i. */
-void sbars_set_chars(SknBarSet *set, int i, char fill, char empty);
+/* Override fill and empty strings for bar i. */
+void sbars_set_chars(SknBarSet *set, int i, const char *fill, const char *empty);
 
 /* Draw all n bars at 0% and position the cursor on the anchor line
  * (one line below the last bar). Must be called once before any
@@ -188,8 +188,14 @@ static void bar__render(const SknBar *bar, int clamped, char *buf)
 
     buf[pos++] = '\r';
     buf[pos++] = '[';
-    for (int i = 0; i < filled; i++) buf[pos++] = bar->fill;
-    for (int i = 0; i < empty;  i++) buf[pos++] = bar->empty;
+    for (int i = 0; i < filled; i++) {
+        const char *s = bar->fill;
+        while (*s) buf[pos++] = *s++;
+    }
+    for (int i = 0; i < empty; i++) {
+        const char *s = bar->empty;
+        while (*s) buf[pos++] = *s++;
+    }
     buf[pos++] = ']';
     pos += sprintf(buf + pos, " %3d%%  %d/%d", pct, clamped, bar->total);
     buf[pos] = '\0';
@@ -203,14 +209,14 @@ SknBar *sbar_init(int total, int width, FILE *stream)
     bar->total   = total < 1 ? 1 : total;
     bar->width   = width < 1 ? 1 : width;
     bar->current = 0;
-    bar->fill    = '#';
-    bar->empty   = '.';
+    bar->fill    = "\xe2\x96\xb0";  /* ▰ */
+    bar->empty   = "\xe2\x96\xb1";  /* ▱ */
     return bar;
 }
 
 void sbar_free(SknBar *bar) { free(bar); }
 
-void sbar_set_chars(SknBar *bar, char fill, char empty)
+void sbar_set_chars(SknBar *bar, const char *fill, const char *empty)
 {
     bar->fill  = fill;
     bar->empty = empty;
@@ -221,7 +227,7 @@ void sbar_update(SknBar *bar, int value)
     if (value < 0)          value = 0;
     if (value > bar->total) value = bar->total;
     bar->current = value;
-    char buf[bar->width + 32];
+    char buf[bar->width * 4 + 32];
     bar__render(bar, value, buf);
     fputs(buf, bar->stream);
     fflush(bar->stream);
@@ -231,7 +237,7 @@ void sbar_step(SknBar *bar, int delta) { sbar_update(bar, bar->current + delta);
 
 void sbar_finish(SknBar *bar)
 {
-    char buf[bar->width + 32];
+    char buf[bar->width * 4 + 32];
     bar__render(bar, bar->total, buf);
     fputs(buf, bar->stream);
     fputc('\n', bar->stream);
@@ -278,7 +284,7 @@ static void bar__format_elapsed(long long ns, char *buf, size_t bufsz)
 
 static void barset__redraw_one(SknBarSet *set, int i)
 {
-    char buf[set->bars[i].width + 32];
+    char buf[set->bars[i].width * 4 + 32];
     bar__render(&set->bars[i], set->bars[i].current, buf);
     fputs(buf, set->stream);   /* buf includes leading \r */
 }
@@ -287,7 +293,7 @@ static void barset__redraw_one(SknBarSet *set, int i)
 static void barset__redraw_all(SknBarSet *set)
 {
     for (int i = 0; i < set->n; i++) {
-        char buf[set->bars[i].width + 32];
+        char buf[set->bars[i].width * 4 + 32];
         bar__render(&set->bars[i], set->bars[i].current, buf);
         fputs(buf + 1, set->stream);   /* skip \r: already at column 0 */
         fputc('\n', set->stream);
@@ -335,8 +341,8 @@ SknBarSet *sbars_init(int n, FILE *stream)
         set->bars[i].total   = 100;
         set->bars[i].width   = 40;
         set->bars[i].current = 0;
-        set->bars[i].fill    = '#';
-        set->bars[i].empty   = '.';
+        set->bars[i].fill    = "\xe2\x96\xb0";  /* ▰ */
+        set->bars[i].empty   = "\xe2\x96\xb1";  /* ▱ */
     }
     return set;
 }
@@ -351,7 +357,7 @@ void sbars_config(SknBarSet *set, int i, int total, int width)
     set->bars[i].width = width < 1 ? 1 : width;
 }
 
-void sbars_set_chars(SknBarSet *set, int i, char fill, char empty)
+void sbars_set_chars(SknBarSet *set, int i, const char *fill, const char *empty)
 {
     set->bars[i].fill  = fill;
     set->bars[i].empty = empty;
@@ -361,7 +367,7 @@ void sbars_start(SknBarSet *set)
 {
     for (int i = 0; i < set->n; i++) {
         set->bars[i].current = 0;
-        char buf[set->bars[i].width + 32];
+        char buf[set->bars[i].width * 4 + 32];
         bar__render(&set->bars[i], 0, buf);
         fputs(buf + 1, set->stream);   /* skip \r on first draw */
         fputc('\n', set->stream);

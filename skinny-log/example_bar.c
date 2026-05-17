@@ -34,7 +34,7 @@ int main(void)
     /* 3. Custom characters */
     printf("--- custom chars ('=' / ' ') ---\n");
     bar = sbar_init(60, 40, stdout);
-    sbar_set_chars(bar, '=', ' ');
+    sbar_set_chars(bar, "=", " ");
     for (int i = 0; i <= 60; i++) {
         sbar_update(bar, i);
         busy_work(15);
@@ -58,8 +58,8 @@ int main(void)
     sbars_config(set, 0, 100, 30);
     sbars_config(set, 1, 200, 30);
     sbars_config(set, 2,  50, 30);
-    sbars_set_chars(set, 1, '=', '-');
-    sbars_set_chars(set, 2, '*', '.');
+    sbars_set_chars(set, 1, "=", "-");
+    sbars_set_chars(set, 2, "*", ".");
     sbars_start(set);
 
     for (int tick = 1; tick <= 200; tick++) {
